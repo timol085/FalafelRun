@@ -1,0 +1,1426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Falafel Run · Sverige</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧆</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- No Node, no build step: React + TypeScript are compiled in the browser by Babel,
+       Tailwind runs from its browser build, and three.js / R3F load as ES modules. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@19.1.0",
+      "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime",
+      "react-dom": "https://esm.sh/react-dom@19.1.0?external=react",
+      "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?external=react",
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/",
+      "@react-three/fiber": "https://esm.sh/@react-three/fiber@9.1.2?external=react,react-dom,three",
+      "zustand": "https://esm.sh/zustand@5.0.3?external=react"
+    }
+  }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.1.4"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      --font-display: "Fredoka", ui-rounded, system-ui, sans-serif;
+      --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+      --color-tahini: #f6ead2;
+      --color-crust: #9a5b23;
+      --color-chili: #e4572e;
+    }
+    @keyframes slide-in { from { transform: translateY(16px); opacity: 0 } to { transform: none; opacity: 1 } }
+    @keyframes pop { 0% { transform: scale(.6) rotate(-20deg); opacity: 0 } 70% { transform: scale(1.1) rotate(4deg) } 100% { transform: scale(1) rotate(var(--r, 0deg)); opacity: 1 } }
+    @keyframes wobble { 0%,100% { transform: rotate(-6deg) } 50% { transform: rotate(6deg) } }
+    .animate-slide-in { animation: slide-in .35s cubic-bezier(.2,.8,.2,1) both }
+    .animate-pop { animation: pop .5s cubic-bezier(.2,.8,.2,1) both }
+    .animate-wobble { animation: wobble 1.2s ease-in-out infinite }
+  </style>
+  <style>
+    html, body, #root { height: 100%; margin: 0 }
+    body { background: #cfe9f5; overscroll-behavior: none }
+    #boot { position: fixed; inset: 0; display: grid; place-items: center; font: 600 18px Fredoka, system-ui, sans-serif; color: #7c4a1d }
+    #boot pre { max-width: 90vw; white-space: pre-wrap; color: #b91c1c; font: 12px ui-monospace, monospace }
+  </style>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+  <script>
+    Babel.registerPreset('tsx', {
+      presets: [
+        [Babel.availablePresets.typescript, { allExtensions: true, isTSX: true }],
+        [Babel.availablePresets.react, { runtime: 'automatic' }],
+      ],
+    });
+    window.addEventListener('error', (e) => {
+      const boot = document.getElementById('boot');
+      if (boot) boot.innerHTML = '<div>Something burnt in the fryer 🔥<pre>' + (e.message || e) + '</pre></div>';
+    });
+  </script>
+</head>
+<body>
+  <div id="root"><div id="boot">Heating the oil… 🧆</div></div>
+
+<script type="text/babel" data-type="module" data-presets="tsx">
+import { useEffect, useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { create } from 'zustand';
+
+/* ───────────────────────────── Types ───────────────────────────── */
+
+type LatLon = [number, number];
+type Vehicle = 'car' | 'van' | 'train' | 'tram' | 'metro' | 'moose';
+type ArtVariant = 'wrap' | 'plate' | 'pita' | 'box' | 'truck';
+
+interface Source { text: string; source: string; url: string }
+
+interface Stop {
+  id: string;
+  name: string;
+  city: string;
+  area: string;
+  address: string;
+  lat: number;
+  lon: number;
+  /** World-space offset so stops in the same city don't sit on top of each other. */
+  nudge?: [number, number];
+  kind: string;
+  score: { value: string; label: string; source: string; url: string };
+  blurb: string;
+  order: string;
+  tags: string[];
+  reviews: Source[];
+  alsoInTown?: string[];
+  heads?: string;
+  fact: Source;
+  art: { variant: ArtVariant; bg: string; accent: string };
+}
+
+interface Leg { vehicle: Vehicle; via: LatLon[]; chatter: string[] }
+
+/* ───────────────────────────── Data ─────────────────────────────
+   Researched Oct 2026. Ratings are what each linked source reported;
+   review lines are paraphrased, not verbatim quotes. */
+
+const SRC = {
+  dpsSthlm: 'https://www.dagensps.se/weekend/mat-vin/topplistan-stockholms-basta-falafel/',
+  dpsGbg: 'https://www.dagensps.se/weekend/mat-vin/topplistan-goteborgs-basta-falafel/',
+  local2019: 'https://www.thelocal.com/20190808/expats-decide-these-are-the-best-falafel-joints-in-malm',
+  local2018: 'https://www.thelocal.se/20180616/malm-loses-to-copenhagen-in-falafel-world-cup',
+  routesNorth: 'https://www.routesnorth.com/sweden/malmo/malmo-restaurants-bars/mollans-habibi/',
+  spotted: 'https://spottedbylocals.com/malmo/swedish-falafel-paradise',
+  hcLund: 'https://happycow.net/reviews/lundafalafel-lund-370277',
+  thatsupFH: 'https://thatsup.co.uk/gothenburg/restaurant/falafel-house/',
+  spinachUmmy: 'https://spinach.guide/venues/ummy-97987',
+  wanderlogDrF: 'https://wanderlog.com/place/details/7065818',
+  hcKing: 'https://happycow.net/reviews/king-umea-74752',
+  hcTaameya: 'https://www.happycow.net/reviews/taameya-falafel-stockholm-254480',
+  timeoutSthlm: 'https://www.timeout.com/stockholm/restaurants/best-street-food-in-stockholm',
+};
+
+const STOPS: Stop[] = [
+  {
+    id: 'habibi', name: 'Möllans Habibi', city: 'Malmö', area: 'Möllevången', address: 'Bergsgatan 37, Malmö',
+    lat: 55.592, lon: 13.007, nudge: [-0.7, 0.6], kind: 'Falafel joint',
+    score: { value: 'Möllan classic', label: 'Called some of Malmö’s best by Routes North', source: 'Routes North', url: SRC.routesNorth },
+    blurb: 'The run starts in Möllevången, the heart of falafel in Sweden’s falafel capital. There are about a dozen spots within a few blocks here, and Habibi is the one the guides keep naming.',
+    order: 'A falafel roll with everything, plus extra chili. It’s Malmö: don’t skip the garlic sauce.',
+    tags: ['Crispy outside', 'Soft middle', 'Cheap', 'Möllan'],
+    reviews: [
+      { text: 'Some of Malmö’s best falafel: crispy on the outside, soft in the middle. (2014 review, from when a wrap cost 20 SEK.)', source: 'Routes North', url: SRC.routesNorth },
+      { text: 'A 2025 locals’ guide still puts Malmö’s falafel hot spot around Möllan.', source: 'Spotted by Locals', url: SRC.spotted },
+    ],
+    fact: { text: 'Malmö’s falafel story starts in 1988, when Falafel Mästaren opened. Falafel No 1 in Rosengård opened soon after.', source: 'The Local', url: SRC.local2018 },
+    art: { variant: 'wrap', bg: '#ffcf70', accent: '#ff7a59' },
+  },
+  {
+    id: 'varnhem', name: 'Värnhems Falafel', city: 'Malmö', area: 'Värnhem', address: 'Värnhem, Malmö',
+    lat: 55.609, lon: 13.019, nudge: [0.1, -0.3], kind: 'Falafel joint',
+    score: { value: '23 / 50', label: 'Recommendations in The Local’s Malmö expat poll — the clear winner', source: 'The Local (2019)', url: SRC.local2019 },
+    blurb: 'Ask Malmö expats where to go and half of them say Värnhem. It won the reader poll easily, and the bread is baked in-house.',
+    order: 'The falafel pita. The bread is the point here.',
+    tags: ['House-baked bread', 'Fresh veg', 'Crowd favourite'],
+    reviews: [
+      { text: 'The hands-down winner of the poll, praised for fresh ingredients and bread baked in-house.', source: 'The Local', url: SRC.local2019 },
+      { text: 'Runners-up in the same poll: Badran’s Super Falafel (the canal kiosk opposite the library) and Mr Falafel on Nobelvägen.', source: 'The Local', url: SRC.local2019 },
+    ],
+    fact: { text: 'Malmö hosted the first International Falafel Awards in 2018. Copenhagen’s Nordisk Falafel won two of the three categories, and no Malmö shop won a prize. Ouch.', source: 'The Local', url: SRC.local2018 },
+    art: { variant: 'pita', bg: '#8fe0b9', accent: '#2f9e77' },
+  },
+  {
+    id: 'lunda', name: 'Lundafalafel', city: 'Lund', area: 'Central Lund', address: 'Lund (pin placed at city level)',
+    lat: 55.704, lon: 13.193, nudge: [0.7, -0.5], kind: 'Falafel joint',
+    score: { value: 'Divisive', label: 'HappyCow reviewers cannot agree on this one', source: 'HappyCow', url: SRC.hcLund },
+    blurb: 'Lund was Skåne’s falafel capital before Malmö took over, so the students here have opinions. This is the spot they argue about most.',
+    order: 'Falafel plate, so you can judge the crunch for yourself.',
+    tags: ['Student fuel', 'Hot debate', 'Crunchy shell'],
+    reviews: [
+      { text: 'One regular calls it the best falafel in Lund and their go-to.', source: 'HappyCow', url: SRC.hcLund },
+      { text: 'Another ranked it the weakest of five Lund falafel places they tried.', source: 'HappyCow', url: SRC.hcLund },
+      { text: 'Praised for a hard, crisp outside with a fresh inside.', source: 'HappyCow', url: SRC.hcLund },
+    ],
+    fact: { text: 'Malmö has long since overtaken Lund as the falafel capital. Möllevången alone has about a dozen spots.', source: 'The Local', url: SRC.local2018 },
+    art: { variant: 'plate', bg: '#a9c1ff', accent: '#5b6ee1' },
+  },
+  {
+    id: 'gothia', name: 'Gothia Falafel', city: 'Göteborg', area: 'Landala Torg', address: 'Landala Torg, Göteborg',
+    lat: 57.693, lon: 11.975, nudge: [-0.6, 0.5], kind: 'Falafel joint',
+    score: { value: '4.80', label: '/ 5 · #1 in Göteborg (Dagens PS composite)', source: 'Dagens PS', url: SRC.dpsGbg },
+    blurb: 'Dagens PS ranks this the best falafel in Göteborg. It scores well on all three things that matter: soft bread, crispy falafel and fresh vegetables.',
+    order: 'Classic falafel roll. Eat it on the square, ideally while it isn’t raining (good luck).',
+    tags: ['Göteborg #1', 'Soft bread', 'Crispy'],
+    reviews: [
+      { text: 'Soft bread, crispy falafel, fresh vegetables. That’s the summary, and it got them the top spot.', source: 'Dagens PS', url: SRC.dpsGbg },
+    ],
+    fact: { text: 'Dagens PS built its ranking by averaging scores from Google, Facebook, Tripadvisor and Yelp.', source: 'Dagens PS', url: SRC.dpsGbg },
+    art: { variant: 'wrap', bg: '#7fd6ee', accent: '#1f7fb8' },
+  },
+  {
+    id: 'jalla', name: 'Jalla House', city: 'Göteborg', area: 'Gamlestaden', address: 'Near Gamlestaden, Göteborg',
+    lat: 57.728, lon: 12.005, nudge: [0.6, -0.4], kind: 'Falafel joint',
+    score: { value: '4.70', label: '/ 5 · #2 in Göteborg (Dagens PS composite)', source: 'Dagens PS', url: SRC.dpsGbg },
+    blurb: 'The silver medal in Göteborg. A short tram ride from Landala, and close enough to the top that you should try both and decide.',
+    order: 'Falafel plate with hummus, then a second opinion on the gold-medal question.',
+    tags: ['Göteborg #2', 'Silver medal'],
+    reviews: [
+      { text: 'Falafel good enough to earn the silver medal.', source: 'Dagens PS', url: SRC.dpsGbg },
+      { text: 'Falafel House on Värmlandsgatan is run by two ex-Malmö residents and praised for its staff, bread and low prices.', source: 'Thatsup', url: SRC.thatsupFH },
+    ],
+    alsoInTown: ['Falafelmästaren: Fänriksgatan 3, served from a grey barrack (4.50)', 'Sunset Falafel: a vegan favourite (4.35)', 'Albaraka Falafel: Wieselgrensplatsen 24 (4.30)'],
+    fact: { text: 'Göteborg’s top two are only 0.10 points apart in the composite. Statistically, that’s a tie. Spiritually, it’s a war.', source: 'Dagens PS', url: SRC.dpsGbg },
+    art: { variant: 'plate', bg: '#ffd97a', accent: '#ef8354' },
+  },
+  {
+    id: 'ummy', name: 'Ummy', city: 'Örebro', area: 'Örebro', address: 'Örebro (pin placed at city level)',
+    lat: 59.274, lon: 15.213, kind: 'Lebanese restaurant',
+    score: { value: '4.3', label: '/ 5 on Google Maps · 334 reviews (via Spinach)', source: 'Spinach', url: SRC.spinachUmmy },
+    blurb: 'A Lebanese kitchen in the middle of Sweden, and the falafel is its most recommended dish. A good place to refuel halfway across the country.',
+    order: 'Falafel, obviously. It’s the most recommended dish. Add a side of hummus.',
+    tags: ['Lebanese', 'Mid-Sweden refuel', 'Most-recommended: falafel'],
+    reviews: [
+      { text: 'Rated 4.3 across 334 Google Maps reviews, and the falafel is its most recommended dish.', source: 'Spinach', url: SRC.spinachUmmy },
+    ],
+    alsoInTown: ['Örebro Ölhall: a beer hall with homemade carrot falafel, served with kale and butternut purée'],
+    fact: { text: 'Örebro is roughly halfway between Göteborg and Stockholm, which makes this the official falafel half-time break.', source: 'Spinach', url: SRC.spinachUmmy },
+    art: { variant: 'plate', bg: '#f8b4cb', accent: '#c2477a' },
+  },
+  {
+    id: 'alhajji', name: 'Falafel Alhajji', city: 'Stockholm', area: 'Årsta', address: 'Årsta, Stockholm (small kiosk)',
+    lat: 59.299, lon: 18.040, nudge: [0.3, 0.7], kind: 'Kiosk',
+    score: { value: '4.50', label: '/ 5 · #2 in Stockholm (Dagens PS composite)', source: 'Dagens PS', url: SRC.dpsSthlm },
+    blurb: 'A small kiosk in Årsta that ranks second in all of Stockholm. You get crispy rolls at a budget price.',
+    order: 'Falafel roll. Keep the change for a second one.',
+    tags: ['Kiosk', 'Budget', 'Crispy rolls'],
+    reviews: [
+      { text: 'Crispy falafel rolls at a budget-friendly price.', source: 'Dagens PS', url: SRC.dpsSthlm },
+    ],
+    fact: { text: 'Dagens PS’s Stockholm list averages ratings from Google, Thatsup, Facebook, Tripadvisor and Yelp.', source: 'Dagens PS', url: SRC.dpsSthlm },
+    art: { variant: 'wrap', bg: '#cdeb9c', accent: '#5aa469' },
+  },
+  {
+    id: 'taameya', name: "Ta'ameya", city: 'Stockholm', area: 'Vasastan', address: 'Tegnérgatan 18, Stockholm (the original)',
+    lat: 59.338, lon: 18.058, nudge: [-0.3, -0.6], kind: 'Egyptian street food',
+    score: { value: '4.75', label: '/ 5 · #1 in Stockholm (Dagens PS composite)', source: 'Dagens PS', url: SRC.dpsSthlm },
+    blurb: 'Stockholm’s number one makes everything from scratch. They roast and grind their own spices, bake their own bread, and make the falafel Egyptian-style, from fava beans instead of chickpeas.',
+    order: 'The ta’ameya sandwich (fava-bean falafel) in house bread. It’s greener inside than you expect.',
+    tags: ['Stockholm #1', 'Fava beans', 'Home-made bread', 'Egyptian'],
+    reviews: [
+      { text: 'Everything is made from scratch, spices are roasted and ground in-house, and the falafel is made from fava beans.', source: 'Dagens PS', url: SRC.dpsSthlm },
+      { text: 'Time Out calls the Tegnérgatan shop the original. There are now branches in Gallerian (Hamngatan 37) and on Folkungagatan.', source: 'Time Out', url: SRC.timeoutSthlm },
+    ],
+    heads: 'Heads-up: HappyCow says it was previously listed as vegetarian but was reported in Dec 2025 to also serve meat.',
+    alsoInTown: ['Maxos: Kungsholmen, family-run, creamy hummus (4.43)', 'Falloumi: Skanstull, halloumi + falafel (4.38)', 'Falafelbaren: Hornsgatan, pickled red cabbage (4.33)', 'Malmø: at Teatern, run by Jason Diakité'],
+    fact: { text: 'Ta’ameya is the Egyptian name for falafel, and it’s traditionally made from fava beans rather than chickpeas.', source: 'Dagens PS', url: SRC.dpsSthlm },
+    art: { variant: 'pita', bg: '#f9dd9a', accent: '#e17055' },
+  },
+  {
+    id: 'drfalafel', name: 'Dr. Falafel', city: 'Uppsala', area: 'Uppsala', address: 'Gerd Enequists gata 6, Uppsala',
+    lat: 59.846, lon: 17.640, kind: 'Food truck',
+    score: { value: '3.4', label: '/ 5 on Google · 150 reviews: 63 five-stars, 35 one-stars', source: 'Wanderlog', url: SRC.wanderlogDrF },
+    blurb: 'Possibly Sweden’s most polarizing falafel. Reviews split between “best in the world” and “nothing extraordinary”, with very little in between.',
+    order: 'A falafel wrap, eaten by the little park in summer. Bring patience; the queue can be long.',
+    tags: ['Food truck', 'Late-night', 'Polarizing', 'Park picnic'],
+    reviews: [
+      { text: 'Fans praise the fresh falafel and friendly staff, and some call it their favourite nearby food truck.', source: 'Wanderlog', url: SRC.wanderlogDrF },
+      { text: 'The main complaints are long waits and the occasional missing item in an order.', source: 'Wanderlog', url: SRC.wanderlogDrF },
+    ],
+    fact: { text: 'Of its 150 Google ratings, 98 are either five stars or one star. The rest of the scale is barely used.', source: 'Wanderlog', url: SRC.wanderlogDrF },
+    art: { variant: 'truck', bg: '#b9b3ff', accent: '#6c5ce7' },
+  },
+  {
+    id: 'king', name: 'King', city: 'Umeå', area: 'Umeå', address: 'Umeå (take-out + food truck)',
+    lat: 63.826, lon: 20.263, kind: 'Take-out & food truck',
+    score: { value: 'Best in town', label: 'According to a HappyCow reviewer', source: 'HappyCow', url: SRC.hcKing },
+    blurb: 'The northernmost stop. Past here our search turned up nothing worth the drive, so King is the last falafel before the tundra.',
+    order: 'Falafel with pickles, tahini and fried eggplant. Go at lunch: it’s mostly open during the day.',
+    tags: ['Northernmost', 'Fried eggplant', 'Daytime hours'],
+    reviews: [
+      { text: 'A reviewer calls it the best falafel in town, with pickles, tahini, fried eggplant and other vegetables.', source: 'HappyCow', url: SRC.hcKing },
+      { text: 'Not always open, and usually only during the day. Check before driving 600 km on a moose.', source: 'HappyCow', url: SRC.hcKing },
+    ],
+    fact: { text: 'Our search found no standout falafel in Luleå or Sundsvall. Somebody up north, please open one.', source: 'HappyCow', url: SRC.hcKing },
+    art: { variant: 'truck', bg: '#92eeee', accent: '#0984e3' },
+  },
+];
+
+const LEGS: Leg[] = [
+  { vehicle: 'car', via: [], chatter: ['Rolling down Bergsgatan…', 'Smelling garlic sauce from three directions', 'Parallel parking. Badly.'] },
+  { vehicle: 'train', via: [[55.66, 13.12]], chatter: ['Boarding the regional train to Lund', 'Skåne fields, flat as a pita', 'Next stop: student city'] },
+  { vehicle: 'car', via: [[56.05, 12.85], [56.67, 12.95], [57.1, 12.32], [57.45, 12.1]], chatter: ['Merging onto the E6 northbound', 'Waving at the Helsingborg ferries', 'Halmstad: beach town, zero falafel scheduled', 'Varberg fortress on the left', 'Seagulls. So many seagulls.'] },
+  { vehicle: 'tram', via: [], chatter: ['Ding ding! Riding the blue tram', 'Brunnsparken: everyone changes here', 'Hold on, it’s a Göteborg tram'] },
+  { vehicle: 'van', via: [[57.93, 12.53], [58.39, 13.85], [59.07, 15.11]], chatter: ['Falafel van, heading inland', 'Alingsås: resisting a fika detour', 'Lake Vänern on the left. It’s enormous.', 'Hallsberg: the great railway knot'] },
+  { vehicle: 'car', via: [[59.39, 15.84], [59.37, 16.51], [59.2, 17.63]], chatter: ['E20 eastbound', 'Arboga, Eskilstuna… the Mälaren valley', 'Södertälje: smells like Stockholm traffic', 'Welcome to the capital'] },
+  { vehicle: 'metro', via: [], chatter: ['Taking the tunnelbana north', 'Admiring the cave-art stations', 'Mind the gap'] },
+  { vehicle: 'train', via: [[59.65, 17.93]], chatter: ['Northbound train to Uppsala', 'Arlanda zooms past', 'Uppsala Cathedral spires ahead'] },
+  { vehicle: 'moose', via: [[60.67, 16.95], [61.3, 16.85], [61.73, 16.9], [62.39, 17.1], [62.63, 17.7], [63.29, 18.5]], chatter: ['The trains were full. A moose offered a lift.', 'Gävle: the straw goat is (probably) still standing', 'Hudiksvall… Sundsvall… so many -svalls', 'Höga Kusten: majestic, and very steep for hooves', 'Moose speed: surprisingly decent', 'Umeå in sight!'] },
+];
+
+const DECO: { name: string; lat: number; lon: number; kind: 'city' | 'country' }[] = [
+  { name: 'Kiruna', lat: 67.85, lon: 20.22, kind: 'city' },
+  { name: 'Luleå', lat: 65.58, lon: 22.0, kind: 'city' },
+  { name: 'Östersund', lat: 63.18, lon: 14.64, kind: 'city' },
+  { name: 'Sundsvall', lat: 62.39, lon: 17.1, kind: 'city' },
+  { name: 'Gävle', lat: 60.67, lon: 16.95, kind: 'city' },
+  { name: 'Karlstad', lat: 59.38, lon: 13.5, kind: 'city' },
+  { name: 'Jönköping', lat: 57.78, lon: 14.16, kind: 'city' },
+  { name: 'Visby', lat: 57.64, lon: 18.3, kind: 'city' },
+  { name: 'Kalmar', lat: 56.66, lon: 16.2, kind: 'city' },
+  { name: 'Norge', lat: 64.6, lon: 11.2, kind: 'country' },
+  { name: 'Suomi', lat: 64.6, lon: 25.8, kind: 'country' },
+  { name: 'Danmark 👀', lat: 55.6, lon: 11.6, kind: 'country' },
+];
+
+/* ───────────────────────────── Geography ───────────────────────────── */
+
+const K = 4, LAT0 = 62, LON0 = 16, H = 0.5;
+const toXZ = (lat: number, lon: number): [number, number] => [(lon - LON0) * K * 0.5, -(lat - LAT0) * K];
+
+// A hand-traced, deliberately chunky outline of Sweden (lat, lon), clockwise from Smygehuk.
+const MAINLAND: LatLon[] = [
+  [55.34, 13.36], [55.43, 13.82], [55.55, 14.35], [55.92, 14.3], [56.17, 14.86], [56.16, 15.59], [56.4, 16.05],
+  [56.66, 16.36], [57.2, 16.55], [57.76, 16.64], [58.3, 16.85], [58.6, 16.95], [58.75, 17.4], [58.9, 17.95],
+  [59.2, 18.4], [59.4, 18.9], [59.76, 18.9], [60.34, 18.45], [60.67, 17.25], [61.3, 17.2], [61.73, 17.2],
+  [62.39, 17.45], [62.63, 17.94], [63.29, 18.8], [63.82, 20.35], [64.3, 21.05], [64.75, 21.25], [65.32, 21.55],
+  [65.58, 22.2], [65.83, 24.14], [66.39, 23.65], [67.21, 23.4], [68.44, 22.48], [69.06, 20.55], [68.43, 18.13],
+  [67.95, 17.0], [67.5, 16.2], [66.9, 15.6], [66.1, 14.6], [65.5, 14.4], [64.6, 13.8], [64.0, 12.6], [63.3, 12.1],
+  [62.7, 12.1], [62.0, 12.3], [61.5, 12.6], [61.0, 12.4], [60.2, 12.5], [59.8, 11.9], [59.1, 11.4], [58.94, 11.17],
+  [58.35, 11.2], [57.7, 11.75], [57.1, 12.15], [56.67, 12.8], [56.2, 12.5], [56.05, 12.65], [55.6, 12.92],
+  [55.4, 12.83],
+];
+const GOTLAND: LatLon[] = [[56.92, 18.15], [57.25, 18.1], [57.6, 18.35], [57.95, 18.75], [57.85, 19.1], [57.4, 18.85], [57.05, 18.4]];
+const OLAND: LatLon[] = [[56.2, 16.4], [56.7, 16.62], [57.35, 17.08], [57.25, 16.95], [56.6, 16.48]];
+const LAKES: LatLon[][] = [
+  [[58.38, 12.32], [58.5, 13.15], [58.71, 13.82], [59.0, 13.95], [59.31, 14.1], [59.38, 13.5], [59.2, 13.1], [59.05, 12.7], [58.75, 12.4]],
+  [[57.78, 14.17], [58.03, 14.48], [58.54, 15.04], [58.88, 14.9], [58.53, 14.55], [58.3, 14.3]],
+  [[59.6, 16.4], [59.45, 16.6], [59.42, 17.3], [59.36, 17.75], [59.47, 17.6], [59.6, 17.0]],
+];
+// Norwegian border from the north, used to place the mountain range.
+const BORDER: LatLon[] = MAINLAND.slice(MAINLAND.findIndex(p => p[0] === 69.06), MAINLAND.findIndex(p => p[0] === 61.5) + 1);
+
+const toXZPoly = (poly: LatLon[]) => poly.map(([la, lo]) => toXZ(la, lo));
+const MAINLAND_XZ = toXZPoly(MAINLAND);
+const LAKES_XZ = LAKES.map(toXZPoly);
+
+function inPoly(x: number, z: number, poly: [number, number][]) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i], [xj, zj] = poly[j];
+    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function haversineKm([la1, lo1]: LatLon, [la2, lo2]: LatLon) {
+  const r = Math.PI / 180, dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
+  const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.sqrt(a));
+}
+
+// Seeded RNG so the forest looks the same every visit.
+function rng(seed: number) {
+  return () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+}
+
+const STOP_POS = STOPS.map(s => {
+  const [x, z] = toXZ(s.lat, s.lon);
+  return new THREE.Vector3(x + (s.nudge?.[0] ?? 0), H, z + (s.nudge?.[1] ?? 0));
+});
+
+const SPEED: Record<Vehicle, number> = { car: 2.2, van: 1.9, train: 3, tram: 0.8, metro: 0.8, moose: 2.4 };
+
+const LEG_RT = LEGS.map((leg, i) => {
+  const pts = [
+    STOP_POS[i].clone(),
+    ...leg.via.map(([la, lo]) => { const [x, z] = toXZ(la, lo); return new THREE.Vector3(x, H, z); }),
+    STOP_POS[i + 1].clone(),
+  ].map(p => p.setY(H + 0.06));
+  const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+  const ll: LatLon[] = [[STOPS[i].lat, STOPS[i].lon], ...leg.via, [STOPS[i + 1].lat, STOPS[i + 1].lon]];
+  const km = ll.slice(1).reduce((sum, p, j) => sum + haversineKm(ll[j], p), 0);
+  const duration = THREE.MathUtils.clamp(curve.getLength() / SPEED[leg.vehicle], 2.8, 11);
+  return { curve, km, duration };
+});
+const TOTAL_KM = LEG_RT.reduce((s, l) => s + l.km, 0);
+
+const VEHICLE_INFO: Record<Vehicle, { label: string; emoji: string }> = {
+  car: { label: 'Red wagon', emoji: '🚗' },
+  van: { label: 'Falafel van', emoji: '🚐' },
+  train: { label: 'Regional train', emoji: '🚆' },
+  tram: { label: 'Göteborg tram', emoji: '🚋' },
+  metro: { label: 'Tunnelbana', emoji: '🚇' },
+  moose: { label: 'Älg Express', emoji: '🫎' },
+};
+
+const CENTER = (() => { const [x, z] = toXZ(61.5, 16.8); return new THREE.Vector3(x, H, z); })();
+
+/* ───────────────────────────── State ─────────────────────────────
+   React state for things the UI shows; a mutable `live` object for
+   per-frame values so we don't re-render 60×/s. */
+
+const live = { progress: 0, vehiclePos: STOP_POS[0].clone() };
+const rig = { wantDist: null as number | null, target: CENTER.clone() };
+
+interface RunState {
+  started: boolean;
+  current: number;
+  target: number;
+  moving: boolean;
+  legIdx: number;
+  dir: 1 | -1;
+  visited: boolean[];
+  kmTotal: number;
+  vehicle: Vehicle;
+  overview: boolean;
+  panelOpen: boolean;
+  finaleSeen: boolean;
+  showFinale: boolean;
+  start: () => void;
+  goTo: (i: number) => void;
+  arrive: () => void;
+  toggleOverview: () => void;
+  setPanel: (open: boolean) => void;
+  closeFinale: () => void;
+}
+
+const LAST = STOPS.length - 1;
+
+const useRun = create<RunState>((set, get) => {
+  const beginLeg = (from: number, to: number) => {
+    const dir = to > from ? 1 : -1;
+    const legIdx = dir > 0 ? from : from - 1;
+    live.progress = 0;
+    rig.wantDist = 17;
+    set({ moving: true, dir, legIdx, vehicle: LEGS[legIdx].vehicle, panelOpen: false, overview: false });
+  };
+  return {
+    started: false, current: 0, target: 0, moving: false, legIdx: 0, dir: 1,
+    visited: STOPS.map(() => false), kmTotal: 0, vehicle: 'car', overview: true,
+    panelOpen: false, finaleSeen: false, showFinale: false,
+    start: () => {
+      rig.wantDist = 11;
+      set(s => ({ started: true, overview: false, panelOpen: true, visited: s.visited.map((v, i) => v || i === 0) }));
+    },
+    goTo: (i) => {
+      const s = get();
+      if (!s.started) return;
+      set({ target: i, overview: false });
+      if (s.moving) return; // picked up on arrival
+      if (i === s.current) { rig.wantDist = 11; set({ panelOpen: true }); return; }
+      beginLeg(s.current, i);
+    },
+    arrive: () => {
+      const s = get();
+      const next = s.current + s.dir;
+      const visited = s.visited.map((v, i) => v || i === next);
+      const kmTotal = s.kmTotal + LEG_RT[s.legIdx].km;
+      if (next === s.target) {
+        rig.wantDist = 11;
+        const finale = next === LAST && !s.finaleSeen;
+        set({ current: next, visited, kmTotal, moving: false, panelOpen: !finale, showFinale: finale, finaleSeen: s.finaleSeen || finale });
+      } else {
+        set({ current: next, visited, kmTotal });
+        beginLeg(next, s.target);
+      }
+    },
+    toggleOverview: () => {
+      const overview = !get().overview;
+      rig.wantDist = overview ? 82 : 11;
+      set({ overview, panelOpen: !overview && !get().moving });
+    },
+    setPanel: (open) => set({ panelOpen: open }),
+    closeFinale: () => set({ showFinale: false, panelOpen: true }),
+  };
+});
+
+/* ───────────────────────────── 3D: world ───────────────────────────── */
+
+const SAND = new THREE.Color('#e9d8a6');
+const LAND_STOPS: [number, string][] = [[55, '#a6d86f'], [58, '#83c35c'], [61, '#5f9f4d'], [64, '#4c8746'], [66.5, '#8a9c7a'], [68.6, '#eef2ee']];
+
+function landColor(lat: number, out: THREE.Color) {
+  for (let i = 1; i < LAND_STOPS.length; i++) {
+    if (lat <= LAND_STOPS[i][0] || i === LAND_STOPS.length - 1) {
+      const [a, ca] = LAND_STOPS[i - 1], [b, cb] = LAND_STOPS[i];
+      return out.set(ca).lerp(new THREE.Color(cb), THREE.MathUtils.clamp((lat - a) / (b - a), 0, 1));
+    }
+  }
+  return out;
+}
+
+function shapeFrom(poly: LatLon[]) {
+  const s = new THREE.Shape();
+  poly.forEach(([la, lo], i) => { const [x, z] = toXZ(la, lo); i ? s.lineTo(x, -z) : s.moveTo(x, -z); });
+  s.closePath();
+  return s;
+}
+
+function makeLand(poly: LatLon[]) {
+  const g = new THREE.ExtrudeGeometry(shapeFrom(poly), { depth: H, bevelEnabled: false });
+  g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position, col = new Float32Array(pos.count * 3), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    landColor(LAT0 - pos.getZ(i) / K, c);
+    if (pos.getY(i) < H * 0.5) c.lerp(SAND, 0.9);
+    c.toArray(col, i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+
+function makeLake(poly: LatLon[]) {
+  const g = new THREE.ShapeGeometry(shapeFrom(poly));
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+
+function Land() {
+  const geos = useMemo(() => [MAINLAND, GOTLAND, OLAND].map(makeLand), []);
+  const lakes = useMemo(() => LAKES.map(makeLake), []);
+  return (
+    <group>
+      {geos.map((g, i) => (
+        <mesh key={i} geometry={g} receiveShadow castShadow>
+          <meshStandardMaterial vertexColors roughness={0.95} flatShading />
+        </mesh>
+      ))}
+      {lakes.map((g, i) => (
+        <mesh key={i} geometry={g} position-y={H + 0.012} receiveShadow>
+          <meshStandardMaterial color="#5fb3d9" roughness={0.3} metalness={0.1} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function Water() {
+  const mat = useRef<THREE.MeshStandardMaterial>(null!);
+  useFrame(({ clock }) => { mat.current.color.setHSL(0.54, 0.55, 0.62 + Math.sin(clock.elapsedTime * 0.5) * 0.01); });
+  return (
+    <mesh rotation-x={-Math.PI / 2} position-y={0.16} receiveShadow>
+      <planeGeometry args={[700, 700]} />
+      <meshStandardMaterial ref={mat} color="#79c2dd" roughness={0.4} />
+    </mesh>
+  );
+}
+
+function Forest() {
+  const trees = useRef<THREE.InstancedMesh>(null!);
+  const mounts = useRef<THREE.InstancedMesh>(null!);
+  const caps = useRef<THREE.InstancedMesh>(null!);
+  const { treeMats, mountMats, capMats, treeCols } = useMemo(() => {
+    const rand = rng(42);
+    const [minX, maxX] = [Math.min(...MAINLAND_XZ.map(p => p[0])), Math.max(...MAINLAND_XZ.map(p => p[0]))];
+    const [minZ, maxZ] = [Math.min(...MAINLAND_XZ.map(p => p[1])), Math.max(...MAINLAND_XZ.map(p => p[1]))];
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3(), c = new THREE.Color();
+    const treeMats: THREE.Matrix4[] = [], treeCols: THREE.Color[] = [];
+    const roadPts = LEG_RT.flatMap(l => l.curve.getPoints(60));
+    for (let tries = 0; treeMats.length < 1100 && tries < 40000; tries++) {
+      const x = minX + rand() * (maxX - minX), z = minZ + rand() * (maxZ - minZ);
+      const lat = LAT0 - z / K;
+      const density = lat < 57 ? 0.3 : lat < 66 ? 0.95 : 0.35;
+      if (rand() > density || !inPoly(x, z, MAINLAND_XZ) || LAKES_XZ.some(l => inPoly(x, z, l))) continue;
+      if (STOP_POS.some(sp => Math.hypot(sp.x - x, sp.z - z) < 0.7)) continue;
+      if (roadPts.some(cp => Math.hypot(cp.x - x, cp.z - z) < 0.25)) continue;
+      const h = 0.25 + rand() * 0.35;
+      treeMats.push(m.compose(p.set(x, H, z), q.identity(), s.set(h * 0.55, h, h * 0.55)).clone());
+      treeCols.push(c.setHSL(0.3 + rand() * 0.06, 0.45, lat > 66 ? 0.32 : 0.22 + rand() * 0.08).clone());
+    }
+    const mountMats: THREE.Matrix4[] = [], capMats: THREE.Matrix4[] = [];
+    for (let lat = 62.2; lat < 68.9; lat += 0.22) {
+      const j = BORDER.findIndex(b => b[0] < lat);
+      if (j < 1) continue;
+      const [la1, lo1] = BORDER[j - 1], [la2, lo2] = BORDER[j];
+      const lon = lo2 + ((lat - la2) / (la1 - la2)) * (lo1 - lo2);
+      for (let k = 0; k < 2; k++) {
+        const [x, z] = toXZ(lat + (rand() - 0.5) * 0.2, lon + 0.5 + rand() * 1.4 + k * 0.9);
+        if (!inPoly(x, z, MAINLAND_XZ)) continue;
+        const hgt = 0.9 + rand() * 1.6 * (lat > 66 ? 1.3 : 1), r = 0.9 + rand() * 0.8;
+        mountMats.push(m.compose(p.set(x, H, z), q.identity(), s.set(r, hgt, r)).clone());
+        capMats.push(m.compose(p.set(x, H + hgt * 0.62, z), q.identity(), s.set(r * 0.38, hgt * 0.38, r * 0.38)).clone());
+      }
+    }
+    return { treeMats, treeCols, mountMats, capMats };
+  }, []);
+
+  useLayoutEffect(() => {
+    treeMats.forEach((m, i) => { trees.current.setMatrixAt(i, m); trees.current.setColorAt(i, treeCols[i]); });
+    mountMats.forEach((m, i) => mounts.current.setMatrixAt(i, m));
+    capMats.forEach((m, i) => caps.current.setMatrixAt(i, m));
+    [trees, mounts, caps].forEach(r => { r.current.instanceMatrix.needsUpdate = true; });
+    if (trees.current.instanceColor) trees.current.instanceColor.needsUpdate = true;
+  }, [treeMats, mountMats, capMats, treeCols]);
+
+  const cone = useMemo(() => new THREE.ConeGeometry(1, 1, 6).translate(0, 0.5, 0), []);
+  const mountain = useMemo(() => new THREE.ConeGeometry(1, 1, 5).translate(0, 0.5, 0), []);
+  return (
+    <group>
+      <instancedMesh ref={trees} args={[cone, undefined, treeMats.length]} castShadow receiveShadow>
+        <meshStandardMaterial flatShading roughness={1} />
+      </instancedMesh>
+      <instancedMesh ref={mounts} args={[mountain, undefined, mountMats.length]} castShadow receiveShadow>
+        <meshStandardMaterial color="#8d8f87" flatShading roughness={1} />
+      </instancedMesh>
+      <instancedMesh ref={caps} args={[mountain, undefined, capMats.length]}>
+        <meshStandardMaterial color="#ffffff" flatShading roughness={0.8} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function Clouds() {
+  const group = useRef<THREE.Group>(null!);
+  const clouds = useMemo(() => {
+    const rand = rng(7);
+    return Array.from({ length: 14 }, () => ({
+      x: -50 + rand() * 100, y: 7 + rand() * 4, z: -36 + rand() * 72, s: 0.8 + rand() * 1.2,
+      puffs: Array.from({ length: 4 }, (_, i) => [i * 0.9 - 1.3, rand() * 0.4, (rand() - 0.5) * 0.8, 0.7 + rand() * 0.6]),
+    }));
+  }, []);
+  useFrame((_, dt) => {
+    group.current.children.forEach(c => { c.position.x += dt * 0.35; if (c.position.x > 55) c.position.x = -55; });
+  });
+  return (
+    <group ref={group}>
+      {clouds.map((c, i) => (
+        <group key={i} position={[c.x, c.y, c.z]} scale={c.s}>
+          {c.puffs.map(([x, y, z, r], j) => (
+            <mesh key={j} position={[x, y, z]} castShadow>
+              <icosahedronGeometry args={[r, 1]} />
+              <meshStandardMaterial color="#ffffff" flatShading roughness={1} transparent opacity={0.92} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function Roads() {
+  const visited = useRun(s => s.visited);
+  const tubes = useMemo(() => LEG_RT.map(l => new THREE.TubeGeometry(l.curve, 160, 0.07, 6, false)), []);
+  return (
+    <group>
+      {tubes.map((g, i) => {
+        const driven = visited[i] && visited[i + 1];
+        return (
+          <mesh key={i} geometry={g} receiveShadow>
+            <meshStandardMaterial color={driven ? '#f59e0b' : '#5b6370'} emissive={driven ? '#b45309' : '#000000'} emissiveIntensity={driven ? 0.35 : 0} roughness={0.7} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
+}
+
+/* ───────────────────────────── 3D: markers ───────────────────────────── */
+
+const BALL_GEO = new THREE.IcosahedronGeometry(0.13, 1);
+const BALL_MAT = new THREE.MeshStandardMaterial({ color: '#9a5b23', flatShading: true, roughness: 0.9 });
+const PITA_MAT = new THREE.MeshStandardMaterial({ color: '#f1d39a', roughness: 0.9 });
+
+function FalafelBalls({ count = 3 }: { count?: number }) {
+  const spots: [number, number, number][] = [[-0.12, 0.1, 0.02], [0.13, 0.1, 0.05], [0, 0.11, -0.13], [0.02, 0.27, 0]];
+  return <>{spots.slice(0, count).map((p, i) => <mesh key={i} geometry={BALL_GEO} material={BALL_MAT} position={p} castShadow />)}</>;
+}
+
+function Marker({ i }: { i: number }) {
+  const bob = useRef<THREE.Group>(null!);
+  const ring = useRef<THREE.Mesh>(null!);
+  const isCurrent = useRun(s => s.current === i && s.started);
+  const visited = useRun(s => s.visited[i]);
+  const goTo = useRun(s => s.goTo);
+  const [hover, setHover] = useState(false);
+  const p = STOP_POS[i];
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime;
+    bob.current.position.y = H + 0.75 + Math.sin(t * 2 + i) * 0.08;
+    bob.current.rotation.y = t * 0.7 + i;
+    const k = THREE.MathUtils.lerp(bob.current.scale.x, hover || isCurrent ? 1.35 : 1, 0.15);
+    bob.current.scale.setScalar(k);
+    if (ring.current) {
+      const f = (t * 0.7) % 1;
+      ring.current.scale.setScalar(1 + f * 1.6);
+      (ring.current.material as THREE.MeshBasicMaterial).opacity = 1 - f;
+    }
+  });
+  useEffect(() => { document.body.style.cursor = hover ? 'pointer' : ''; }, [hover]);
+  return (
+    <group
+      position={[p.x, 0, p.z]}
+      onClick={(e: any) => { e.stopPropagation(); goTo(i); }}
+      onPointerOver={(e: any) => { e.stopPropagation(); setHover(true); }}
+      onPointerOut={() => setHover(false)}
+    >
+      <mesh position-y={H + 0.02} rotation-x={-Math.PI / 2} receiveShadow>
+        <circleGeometry args={[0.32, 24]} />
+        <meshStandardMaterial color={visited ? '#10b981' : '#fff7e6'} />
+      </mesh>
+      <mesh position-y={H + 0.38}>
+        <cylinderGeometry args={[0.022, 0.022, 0.7, 6]} />
+        <meshStandardMaterial color="#7c4a1d" />
+      </mesh>
+      <group ref={bob}>
+        <mesh material={PITA_MAT} castShadow>
+          <cylinderGeometry args={[0.32, 0.3, 0.06, 20]} />
+        </mesh>
+        <FalafelBalls count={visited ? 3 : 4} />
+      </group>
+      {isCurrent && (
+        <mesh ref={ring} rotation-x={-Math.PI / 2} position-y={H + 0.03}>
+          <ringGeometry args={[0.36, 0.44, 40]} />
+          <meshBasicMaterial color="#f59e0b" transparent />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+/* ───────────────────────────── 3D: vehicles (forward = +z) ───────────────────────────── */
+
+function useSpin() {
+  const refs = useRef<(THREE.Object3D | null)[]>([]);
+  useFrame((_, dt) => { if (useRun.getState().moving) refs.current.forEach(w => w && (w.rotation.x += dt * 14)); });
+  return (i: number) => (el: THREE.Object3D | null) => { refs.current[i] = el; };
+}
+
+function Wheel({ position, r = 0.09, setRef }: { position: [number, number, number]; r?: number; setRef: (el: THREE.Object3D | null) => void }) {
+  return (
+    <group position={position} ref={setRef}>
+      <mesh rotation-z={Math.PI / 2} castShadow>
+        <cylinderGeometry args={[r, r, 0.07, 12]} />
+        <meshStandardMaterial color="#1f2937" flatShading />
+      </mesh>
+      <mesh position-x={0.036}>
+        <boxGeometry args={[0.005, r * 1.2, 0.03]} />
+        <meshStandardMaterial color="#d1d5db" />
+      </mesh>
+    </group>
+  );
+}
+
+function Lights({ z, y = 0.17, w = 0.12 }: { z: number; y?: number; w?: number }) {
+  return (
+    <>
+      {[-w, w].map(x => (
+        <mesh key={x} position={[x, y, z]}>
+          <boxGeometry args={[0.07, 0.04, 0.02]} />
+          <meshStandardMaterial color="#fff6c2" emissive="#ffe27a" emissiveIntensity={1.2} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+function Car() {
+  const spin = useSpin();
+  return (
+    <group>
+      <mesh position={[0, 0.17, 0]} castShadow><boxGeometry args={[0.36, 0.15, 0.74]} /><meshStandardMaterial color="#d62828" flatShading /></mesh>
+      <mesh position={[0, 0.3, -0.07]} castShadow><boxGeometry args={[0.32, 0.13, 0.46]} /><meshStandardMaterial color="#9ad0ec" roughness={0.2} /></mesh>
+      <mesh position={[0, 0.375, -0.07]}><boxGeometry args={[0.33, 0.02, 0.47]} /><meshStandardMaterial color="#d62828" /></mesh>
+      <mesh position={[0, 0.42, -0.1]} castShadow><boxGeometry args={[0.2, 0.06, 0.26]} /><meshStandardMaterial color="#f1d39a" /></mesh>
+      <group position={[0, 0.48, -0.1]} scale={0.6}><FalafelBalls count={2} /></group>
+      <Lights z={0.371} />
+      {([[-0.19, 0.09, 0.23], [0.19, 0.09, 0.23], [-0.19, 0.09, -0.23], [0.19, 0.09, -0.23]] as [number, number, number][]).map((p, i) => <Wheel key={i} position={p} setRef={spin(i)} />)}
+    </group>
+  );
+}
+
+function Van() {
+  const spin = useSpin();
+  return (
+    <group>
+      <mesh position={[0, 0.2, 0]} castShadow><boxGeometry args={[0.4, 0.2, 0.86]} /><meshStandardMaterial color="#0ea5e9" flatShading /></mesh>
+      <mesh position={[0, 0.39, -0.02]} castShadow><boxGeometry args={[0.4, 0.2, 0.82]} /><meshStandardMaterial color="#fef3c7" flatShading /></mesh>
+      <mesh position={[0, 0.4, 0.4]}><boxGeometry args={[0.34, 0.12, 0.02]} /><meshStandardMaterial color="#9ad0ec" roughness={0.2} /></mesh>
+      <mesh position={[0.205, 0.4, -0.05]}><boxGeometry args={[0.01, 0.1, 0.44]} /><meshStandardMaterial color="#e4572e" /></mesh>
+      <mesh position={[0, 0.72, -0.05]} geometry={BALL_GEO} material={BALL_MAT} scale={1.6} castShadow />
+      <mesh position={[0, 0.52, -0.05]}><cylinderGeometry args={[0.015, 0.015, 0.1]} /><meshStandardMaterial color="#334155" /></mesh>
+      <Lights z={0.431} y={0.2} w={0.13} />
+      {([[-0.21, 0.1, 0.28], [0.21, 0.1, 0.28], [-0.21, 0.1, -0.28], [0.21, 0.1, -0.28]] as [number, number, number][]).map((p, i) => <Wheel key={i} position={p} r={0.1} setRef={spin(i)} />)}
+    </group>
+  );
+}
+
+function Train({ color, cars }: { color: string; cars: number }) {
+  return (
+    <group>
+      {Array.from({ length: cars }, (_, c) => {
+        const z = (cars - 1) * 0.5 - c * 1.0;
+        return (
+          <group key={c} position-z={z}>
+            <mesh position-y={0.24} castShadow><boxGeometry args={[0.38, 0.36, 0.92]} /><meshStandardMaterial color="#f8fafc" flatShading /></mesh>
+            <mesh position-y={0.11}><boxGeometry args={[0.39, 0.1, 0.93]} /><meshStandardMaterial color={color} /></mesh>
+            <mesh position-y={0.29}><boxGeometry args={[0.392, 0.1, 0.8]} /><meshStandardMaterial color="#1e293b" roughness={0.2} /></mesh>
+            <mesh position-y={0.43}><boxGeometry args={[0.3, 0.02, 0.86]} /><meshStandardMaterial color={color} /></mesh>
+            {c === 0 && <Lights z={0.461} y={0.14} w={0.12} />}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+function Moose() {
+  const legs = useRef<(THREE.Group | null)[]>([]);
+  const head = useRef<THREE.Group>(null!);
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime, moving = useRun.getState().moving;
+    legs.current.forEach((l, i) => { if (l) l.rotation.x = moving ? Math.sin(t * 13 + (i % 2 ? Math.PI : 0) + (i > 1 ? Math.PI / 2 : 0)) * 0.55 : 0; });
+    head.current.rotation.x = moving ? Math.sin(t * 13) * 0.06 : Math.sin(t * 1.5) * 0.12;
+  });
+  const brown = '#6b4423';
+  return (
+    <group scale={0.95}>
+      <mesh position={[0, 0.58, 0]} castShadow><boxGeometry args={[0.3, 0.28, 0.66]} /><meshStandardMaterial color={brown} flatShading /></mesh>
+      <mesh position={[0, 0.7, 0.2]} castShadow><boxGeometry args={[0.31, 0.12, 0.24]} /><meshStandardMaterial color="#5a381c" flatShading /></mesh>
+      {([[-0.1, 0.47, 0.24], [0.1, 0.47, 0.24], [-0.1, 0.47, -0.24], [0.1, 0.47, -0.24]] as [number, number, number][]).map((p, i) => (
+        <group key={i} position={p} ref={el => { legs.current[i] = el; }}>
+          <mesh position-y={-0.2} castShadow><boxGeometry args={[0.07, 0.42, 0.07]} /><meshStandardMaterial color="#4a2e16" /></mesh>
+        </group>
+      ))}
+      <group ref={head} position={[0, 0.78, 0.36]}>
+        <mesh position={[0, 0, 0.12]} rotation-x={0.35} castShadow><boxGeometry args={[0.17, 0.18, 0.34]} /><meshStandardMaterial color={brown} flatShading /></mesh>
+        <mesh position={[0, -0.07, 0.3]}><boxGeometry args={[0.15, 0.12, 0.12]} /><meshStandardMaterial color="#4a2e16" /></mesh>
+        <mesh position={[0, -0.17, 0.12]}><boxGeometry args={[0.04, 0.12, 0.04]} /><meshStandardMaterial color="#4a2e16" /></mesh>
+        {[-1, 1].map(s => (
+          <group key={s} position={[s * 0.14, 0.12, 0.06]} rotation-z={s * -0.35}>
+            <mesh position-x={s * 0.1} castShadow><boxGeometry args={[0.24, 0.03, 0.16]} /><meshStandardMaterial color="#d8b98a" flatShading /></mesh>
+            {[-0.05, 0.03, 0.1].map((o, k) => (
+              <mesh key={k} position={[s * (0.12 + o), 0.06, 0.06]}><boxGeometry args={[0.03, 0.1, 0.03]} /><meshStandardMaterial color="#d8b98a" /></mesh>
+            ))}
+          </group>
+        ))}
+      </group>
+      <mesh position={[0, 0.77, -0.05]} geometry={BALL_GEO} material={BALL_MAT} scale={1.4} castShadow />
+      <group position={[0.08, 0.72, -0.28]}>
+        <mesh position-y={0.2}><cylinderGeometry args={[0.01, 0.01, 0.4]} /><meshStandardMaterial color="#334155" /></mesh>
+        <mesh position={[0, 0.33, -0.09]}><boxGeometry args={[0.005, 0.11, 0.17]} /><meshStandardMaterial color="#006aa7" side={THREE.DoubleSide} /></mesh>
+        <mesh position={[0.004, 0.33, -0.07]}><boxGeometry args={[0.006, 0.11, 0.025]} /><meshStandardMaterial color="#fecc00" /></mesh>
+        <mesh position={[0.004, 0.33, -0.09]}><boxGeometry args={[0.006, 0.022, 0.17]} /><meshStandardMaterial color="#fecc00" /></mesh>
+      </group>
+    </group>
+  );
+}
+
+function VehicleModel({ type }: { type: Vehicle }) {
+  switch (type) {
+    case 'car': return <Car />;
+    case 'van': return <Van />;
+    case 'train': return <Train color="#e11d48" cars={2} />;
+    case 'tram': return <Train color="#0284c7" cars={1} />;
+    case 'metro': return <Train color="#0f766e" cars={2} />;
+    case 'moose': return <Moose />;
+  }
+}
+
+const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+
+function VehicleRig() {
+  const g = useRef<THREE.Group>(null!);
+  const type = useRun(s => s.vehicle);
+  const tmp = useMemo(() => ({ p: new THREE.Vector3(), t: new THREE.Vector3() }), []);
+  useFrame((_, dt) => {
+    const s = useRun.getState();
+    if (s.moving) {
+      const leg = LEG_RT[s.legIdx];
+      live.progress = Math.min(1, live.progress + dt / leg.duration);
+      const e = easeInOut(live.progress);
+      const u = s.dir > 0 ? e : 1 - e;
+      leg.curve.getPointAt(u, tmp.p);
+      leg.curve.getTangentAt(u, tmp.t);
+      if (s.dir < 0) tmp.t.negate();
+      g.current.position.copy(tmp.p);
+      const yaw = Math.atan2(tmp.t.x, tmp.t.z);
+      g.current.rotation.y += Math.atan2(Math.sin(yaw - g.current.rotation.y), Math.cos(yaw - g.current.rotation.y)) * 0.25;
+      g.current.position.y = H + 0.04 + (type === 'moose' ? Math.abs(Math.sin(live.progress * 120)) * 0.03 : 0);
+      live.vehiclePos.copy(g.current.position);
+      if (live.progress >= 1) s.arrive();
+    } else {
+      const p = STOP_POS[s.current];
+      g.current.position.set(p.x + 0.55, H + 0.04, p.z + 0.35);
+      live.vehiclePos.copy(g.current.position);
+    }
+  });
+  return <group ref={g}><VehicleModel type={type} /></group>;
+}
+
+/* ───────────────────────────── 3D: camera, sun, labels ───────────────────────────── */
+
+function CameraRig() {
+  const { camera, gl } = useThree();
+  const controls = useMemo(() => {
+    const c = new OrbitControls(camera, gl.domElement);
+    c.enableDamping = true;
+    c.dampingFactor = 0.08;
+    c.maxPolarAngle = 1.2;
+    c.minDistance = 3;
+    c.maxDistance = 140;
+    c.target.copy(CENTER);
+    return c;
+  }, [camera, gl]);
+  useEffect(() => () => controls.dispose(), [controls]);
+  const tmp = useMemo(() => ({ nt: new THREE.Vector3(), off: new THREE.Vector3() }), []);
+  useFrame(() => {
+    const s = useRun.getState();
+    const desired = s.overview || !s.started ? CENTER : s.moving ? live.vehiclePos : STOP_POS[s.current];
+    tmp.nt.copy(controls.target).lerp(desired, s.moving ? 0.12 : 0.06);
+    camera.position.add(tmp.off.copy(tmp.nt).sub(controls.target));
+    controls.target.copy(tmp.nt);
+    if (rig.wantDist != null) {
+      tmp.off.copy(camera.position).sub(controls.target);
+      const len = tmp.off.length(), next = len + (rig.wantDist - len) * 0.05;
+      camera.position.copy(controls.target).add(tmp.off.setLength(next));
+      if (Math.abs(next - rig.wantDist) < 0.05) rig.wantDist = null;
+    }
+    rig.target.copy(controls.target);
+    controls.update();
+  });
+  return null;
+}
+
+function Sun() {
+  const light = useRef<THREE.DirectionalLight>(null!);
+  const { scene } = useThree();
+  useEffect(() => { scene.add(light.current.target); }, [scene]);
+  useFrame(() => {
+    light.current.position.set(rig.target.x + 9, 18, rig.target.z + 7);
+    light.current.target.position.copy(rig.target);
+  });
+  return (
+    <directionalLight
+      ref={light} intensity={2.1} color="#fff4e0" castShadow
+      shadow-mapSize={[2048, 2048]} shadow-camera-left={-16} shadow-camera-right={16}
+      shadow-camera-top={16} shadow-camera-bottom={-16} shadow-camera-near={1} shadow-camera-far={60} shadow-bias={-0.0005}
+    />
+  );
+}
+
+const labelEls: (HTMLDivElement | null)[] = [];
+const decoEls: (HTMLDivElement | null)[] = [];
+const DECO_POS = DECO.map(d => { const [x, z] = toXZ(d.lat, d.lon); return new THREE.Vector3(x, H + 0.2, z); });
+
+function LabelProjector() {
+  const { camera, gl } = useThree();
+  const v = useMemo(() => new THREE.Vector3(), []);
+  useFrame(() => {
+    camera.updateMatrixWorld();
+    const size = { width: gl.domElement.clientWidth, height: gl.domElement.clientHeight };
+    const place =(el: HTMLDivElement | null, p: THREE.Vector3, lift: number, minScale: number) => {
+      if (!el) return;
+      v.set(p.x, p.y + lift, p.z);
+      const d = camera.position.distanceTo(v);
+      v.project(camera);
+      const visible = v.z < 1 && Math.abs(v.x) < 1.15 && Math.abs(v.y) < 1.15;
+      el.style.display = visible ? '' : 'none';
+      if (!visible) return;
+      const scale = THREE.MathUtils.clamp(16 / d, minScale, 1.1);
+      el.style.transform = `translate(${((v.x + 1) / 2) * size.width}px, ${((1 - v.y) / 2) * size.height}px) translate(-50%, -100%) scale(${scale})`;
+      el.style.zIndex = String(1000 - Math.round(d));
+    };
+    STOP_POS.forEach((p, i) => place(labelEls[i], p, 1.15, 0.55));
+    DECO_POS.forEach((p, i) => place(decoEls[i], p, 0, 0.6));
+  });
+  return null;
+}
+
+function Scene() {
+  return (
+    <>
+      <color attach="background" args={['#cfe9f5']} />
+      <fog attach="fog" args={['#cfe9f5', 80, 200]} />
+      <hemisphereLight args={['#eaf6ff', '#5f7d4f', 1.15]} />
+      <Sun />
+      <Water />
+      <Land />
+      <Forest />
+      <Roads />
+      {STOPS.map((_, i) => <Marker key={i} i={i} />)}
+      <VehicleRig />
+      <Clouds />
+      <CameraRig />
+      <LabelProjector />
+    </>
+  );
+}
+
+/* ───────────────────────────── UI: illustration ───────────────────────────── */
+
+function Ball({ x, y, r, seed }: { x: number; y: number; r: number; seed: number }) {
+  const rand = rng(seed * 97 + 13);
+  return (
+    <g>
+      <circle cx={x} cy={y} r={r} fill="#9a5b23" />
+      <circle cx={x - r * 0.25} cy={y - r * 0.3} r={r * 0.55} fill="#b9772f" opacity={0.7} />
+      {Array.from({ length: 6 }, (_, i) => (
+        <circle key={i} cx={x + (rand() - 0.5) * r * 1.4} cy={y + (rand() - 0.5) * r * 1.4} r={r * 0.08} fill={i % 2 ? '#5b3412' : '#7a9a3a'} />
+      ))}
+    </g>
+  );
+}
+
+function FalafelArt({ stop }: { stop: Stop }) {
+  const { variant, bg, accent } = stop.art;
+  const gid = `g-${stop.id}`;
+  const rand = rng(stop.id.length * 31 + stop.name.length);
+  return (
+    <svg viewBox="0 0 320 170" preserveAspectRatio="xMidYMid slice" className="block h-full w-full" role="img" aria-label={`Illustration for ${stop.name}`}>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor={bg} />
+          <stop offset="1" stopColor={accent} />
+        </linearGradient>
+      </defs>
+      <rect width="320" height="170" fill={`url(#${gid})`} />
+      <circle cx="268" cy="38" r="22" fill="#fff8d6" opacity="0.85" />
+      {Array.from({ length: 14 }, (_, i) => (
+        <ellipse key={i} cx={rand() * 320} cy={rand() * 170} rx="2.2" ry="1.2" fill="#fff" opacity="0.5" transform={`rotate(${rand() * 180})`} />
+      ))}
+      <text x="18" y="160" fontFamily="Fredoka, sans-serif" fontWeight="700" fontSize="44" fill="#fff" opacity="0.28">{stop.city.toUpperCase()}</text>
+
+      {variant === 'wrap' && (
+        <g transform="rotate(-16 160 92)">
+          <rect x="70" y="62" width="170" height="64" rx="32" fill="#efd29b" stroke="#d6a95f" strokeWidth="3" />
+          <path d="M70 94 a32 32 0 0 1 32 -32 h60 v64 h-60 a32 32 0 0 1 -32 -32z" fill="#cfd6dc" />
+          {[88, 104, 120, 136, 150].map(x => <path key={x} d={`M${x} 64 l6 60`} stroke="#aab4bc" strokeWidth="1.5" />)}
+          <ellipse cx="238" cy="94" rx="16" ry="34" fill="#7cc35b" />
+          <Ball x={236} y={78} r={13} seed={1} />
+          <Ball x={240} y={104} r={13} seed={2} />
+          <circle cx="250" cy="91" r="5" fill="#e4572e" />
+          <circle cx="226" cy="118" r="4" fill="#e4572e" />
+          <path d="M222 70 q10 10 0 20 q-8 10 4 22" stroke="#fff" strokeWidth="4" fill="none" strokeLinecap="round" />
+        </g>
+      )}
+      {variant === 'plate' && (
+        <g>
+          <ellipse cx="160" cy="104" rx="118" ry="50" fill="#ffffff" />
+          <ellipse cx="160" cy="104" rx="98" ry="38" fill="#f4f1ea" />
+          <ellipse cx="128" cy="102" rx="44" ry="20" fill="#e9d3a9" />
+          <path d="M100 100 q28 -16 56 0 q-26 12 -48 2" stroke="#d4b07a" strokeWidth="3" fill="none" />
+          <path d="M112 98 q14 6 30 -2" stroke="#e8b923" strokeWidth="4" fill="none" strokeLinecap="round" />
+          {[[116, 94], [134, 108], [142, 96]].map(([x, y], i) => <circle key={i} cx={x} cy={y} r="2.5" fill="#c0392b" />)}
+          <Ball x={190} y={90} r={14} seed={3} />
+          <Ball x={214} y={104} r={14} seed={4} />
+          <Ball x={186} y={116} r={14} seed={5} />
+          <Ball x={226} y={82} r={12} seed={6} />
+          {[[170, 76], [240, 112], [204, 126], [110, 124]].map(([x, y], i) => <ellipse key={i} cx={x} cy={y} rx="6" ry="3" fill="#3f9a3f" transform={`rotate(${i * 40} ${x} ${y})`} />)}
+          <path d="M60 86 l34 -24 l8 30z" fill="#efd29b" stroke="#d6a95f" strokeWidth="2" />
+        </g>
+      )}
+      {variant === 'pita' && (
+        <g>
+          <path d="M84 120 a76 76 0 0 1 152 0z" fill="#efd29b" stroke="#d6a95f" strokeWidth="3" />
+          <path d="M100 66 q60 -30 120 0 l-8 18 h-104z" fill="#7cc35b" />
+          <Ball x={130} y={64} r={16} seed={7} />
+          <Ball x={164} y={54} r={17} seed={8} />
+          <Ball x={198} y={64} r={16} seed={9} />
+          {[[116, 74], [150, 72], [182, 76], [210, 78]].map(([x, y], i) => <rect key={i} x={x} y={y} width="10" height="5" rx="2" fill="#8e44ad" transform={`rotate(${i * 25} ${x} ${y})`} />)}
+          <path d="M112 86 q48 16 96 0" stroke="#fff" strokeWidth="5" fill="none" strokeLinecap="round" />
+          <circle cx="146" cy="82" r="5" fill="#e4572e" />
+        </g>
+      )}
+      {variant === 'truck' && (
+        <g>
+          <rect x="56" y="58" width="168" height="76" rx="10" fill="#fdfdfd" />
+          <rect x="224" y="82" width="54" height="52" rx="8" fill="#fdfdfd" />
+          <rect x="234" y="90" width="34" height="20" rx="4" fill="#9ad0ec" />
+          <rect x="74" y="72" width="104" height="38" rx="4" fill="#1e293b" />
+          <path d="M70 72 h112 l-8 -12 h-96z" fill={accent} />
+          {[0, 1, 2, 3, 4, 5].map(i => <rect key={i} x={78 + i * 17} y="60" width="8" height="12" fill="#fff" opacity="0.7" />)}
+          <Ball x={110} y={98} r={10} seed={10} />
+          <Ball x={140} y={100} r={10} seed={11} />
+          <rect x="70" y="110" width="112" height="6" fill="#d6a95f" />
+          <circle cx="96" cy="136" r="14" fill="#1f2937" /><circle cx="96" cy="136" r="5" fill="#d1d5db" />
+          <circle cx="246" cy="136" r="14" fill="#1f2937" /><circle cx="246" cy="136" r="5" fill="#d1d5db" />
+          <Ball x={140} y={38} r={18} seed={12} />
+          <rect x="138" y="54" width="4" height="6" fill="#334155" />
+        </g>
+      )}
+      {variant === 'box' && (
+        <g>
+          <path d="M106 80 h108 l-14 64 h-80z" fill="#fff" stroke="#e5e7eb" strokeWidth="3" />
+          <path d="M112 100 h96" stroke={accent} strokeWidth="8" />
+          <Ball x={134} y={74} r={16} seed={13} />
+          <Ball x={164} y={68} r={17} seed={14} />
+          <Ball x={192} y={76} r={15} seed={15} />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+/* ───────────────────────────── UI: panels ───────────────────────────── */
+
+const mapsUrl = (s: Stop) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${s.name} ${s.address.includes('pin placed') ? s.city : s.address}`)}`;
+
+function Btn({ children, onClick, kind = 'primary', href, className = '' }: { children: any; onClick?: () => void; kind?: 'primary' | 'ghost'; href?: string; className?: string }) {
+  const cls = `inline-flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition active:scale-95 ${
+    kind === 'primary' ? 'bg-crust text-white shadow-md shadow-crust/30 hover:bg-[#82491a]' : 'bg-white/70 text-stone-800 ring-1 ring-stone-900/10 hover:bg-white'
+  } ${className}`;
+  return href
+    ? <a className={cls} href={href} target="_blank" rel="noreferrer">{children}</a>
+    : <button className={cls} onClick={onClick}>{children}</button>;
+}
+
+function SourceLink({ s }: { s: { source: string; url: string } }) {
+  return <a className="whitespace-nowrap text-xs font-medium text-crust underline decoration-crust/30 underline-offset-2 hover:decoration-crust" href={s.url} target="_blank" rel="noreferrer">via {s.source} ↗</a>;
+}
+
+function StopPanel() {
+  const { current, panelOpen, moving, started, setPanel, goTo } = useRun();
+  if (!started || moving || !panelOpen) return null;
+  const s = STOPS[current];
+  return (
+    <aside
+      key={s.id}
+      className="animate-slide-in pointer-events-auto absolute inset-x-2 bottom-2 z-[2000] flex max-h-[62vh] flex-col overflow-hidden rounded-3xl bg-tahini/95 shadow-2xl shadow-stone-900/20 ring-1 ring-stone-900/10 backdrop-blur md:inset-x-auto md:bottom-4 md:right-4 md:top-4 md:max-h-none md:w-[410px]"
+    >
+      <div className="relative h-36 shrink-0 md:h-44">
+        <FalafelArt stop={s} />
+        <button onClick={() => setPanel(false)} className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-white/80 text-stone-700 hover:bg-white" aria-label="Close">✕</button>
+        <span className="absolute left-3 top-3 rounded-full bg-white/85 px-2.5 py-1 text-xs font-semibold text-stone-700">Stop {current + 1} / {STOPS.length}</span>
+      </div>
+      <div className="flex-1 space-y-4 overflow-y-auto px-5 pb-5 pt-4">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-stone-500">{s.city} · {s.area} · {s.kind}</div>
+          <h2 className="font-display text-3xl font-bold leading-tight text-stone-900">{s.name}</h2>
+          <div className="mt-0.5 text-sm text-stone-600">📍 {s.address}</div>
+        </div>
+
+        <div className="flex items-center gap-3 rounded-2xl bg-white/80 p-3 ring-1 ring-stone-900/5">
+          <div className="font-display text-2xl font-bold text-crust">{s.score.value}</div>
+          <div className="min-w-0 flex-1 text-xs leading-snug text-stone-600">{s.score.label}<div><SourceLink s={s.score} /></div></div>
+        </div>
+
+        <p className="text-[15px] leading-relaxed text-stone-800">{s.blurb}</p>
+
+        <div className="flex flex-wrap gap-1.5">
+          {s.tags.map(t => <span key={t} className="rounded-full bg-crust/10 px-2.5 py-1 text-xs font-medium text-crust">{t}</span>)}
+        </div>
+
+        <div className="rounded-2xl bg-chili/10 p-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-chili">Our suggested order</div>
+          <div className="mt-1 text-sm text-stone-800">🌯 {s.order}</div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-bold uppercase tracking-wider text-stone-500">What people say <span className="font-normal normal-case tracking-normal">(paraphrased)</span></div>
+          <ul className="space-y-2">
+            {s.reviews.map((r, i) => (
+              <li key={i} className="rounded-2xl bg-white/70 p-3 text-sm leading-snug text-stone-800 ring-1 ring-stone-900/5">
+                <span className="mr-1 text-amber-500">★</span>{r.text} <SourceLink s={r} />
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {s.heads && <div className="rounded-2xl bg-amber-100 p-3 text-sm text-amber-900">⚠️ {s.heads}</div>}
+
+        {s.alsoInTown && (
+          <div>
+            <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-stone-500">Also in {s.city}</div>
+            <ul className="space-y-1 text-sm text-stone-700">{s.alsoInTown.map(a => <li key={a}>🧆 {a}</li>)}</ul>
+          </div>
+        )}
+
+        <div className="rounded-2xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-900/10">
+          <span className="font-bold">Falafel fact:</span> {s.fact.text} <SourceLink s={s.fact} />
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-stone-900/10 bg-white/50 px-4 py-3">
+        <Btn kind="ghost" href={mapsUrl(s)}>📸 Photos & map ↗</Btn>
+        <div className="flex-1" />
+        {current > 0 && <Btn kind="ghost" onClick={() => goTo(current - 1)}>←</Btn>}
+        {current < LAST
+          ? <Btn onClick={() => goTo(current + 1)}>Drive to {STOPS[current + 1].city === s.city ? STOPS[current + 1].name : STOPS[current + 1].city} →</Btn>
+          : <Btn onClick={() => goTo(0)}>Drive back south ↩</Btn>}
+      </div>
+    </aside>
+  );
+}
+
+function RouteList({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => void }) {
+  const { current, target, moving, visited, goTo, started } = useRun();
+  return (
+    <div className={`${mobileOpen ? 'block' : 'hidden'} pointer-events-auto absolute left-2 right-2 top-[68px] z-[2100] rounded-3xl bg-white/85 p-3 shadow-xl shadow-stone-900/10 ring-1 ring-stone-900/10 backdrop-blur md:left-4 md:right-auto md:top-[84px] md:block md:w-72`}>
+      <div className="mb-1 flex items-center justify-between px-2">
+        <div className="text-xs font-bold uppercase tracking-wider text-stone-500">The route · {Math.round(TOTAL_KM).toLocaleString('sv-SE')} km</div>
+        <button className="text-stone-500 md:hidden" onClick={onClose} aria-label="Close route">✕</button>
+      </div>
+      <ol className="max-h-[46vh] space-y-0.5 overflow-y-auto">
+        {STOPS.map((s, i) => {
+          const here = started && i === current && !moving;
+          const heading = moving && i === target;
+          return (
+            <li key={s.id}>
+              <button
+                disabled={!started}
+                onClick={() => { goTo(i); onClose(); }}
+                className={`flex w-full items-center gap-2.5 rounded-2xl px-2 py-1.5 text-left transition ${here ? 'bg-amber-100' : 'hover:bg-stone-100'} disabled:cursor-default`}
+              >
+                <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${visited[i] ? 'bg-emerald-500 text-white' : 'bg-stone-200 text-stone-600'}`}>
+                  {visited[i] ? '✓' : i + 1}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-stone-800">{s.name}</span>
+                  <span className="block truncate text-xs text-stone-500">{s.city} · {s.area}</span>
+                </span>
+                {here && <span className="text-lg">📍</span>}
+                {heading && <span className="animate-wobble text-lg">{VEHICLE_INFO[LEGS[Math.min(i, LAST - 1)].vehicle].emoji}</span>}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      <Passport />
+    </div>
+  );
+}
+
+function Passport() {
+  const visited = useRun(s => s.visited);
+  return (
+    <div className="mt-2 border-t border-stone-900/10 px-2 pt-2">
+      <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-stone-500">Falafel passport · {visited.filter(Boolean).length}/{STOPS.length}</div>
+      <div className="flex flex-wrap gap-1.5">
+        {STOPS.map((s, i) => (
+          <div
+            key={s.id}
+            title={`${s.name}, ${s.city}`}
+            style={{ ['--r' as any]: `${((i * 37) % 30) - 15}deg`, transform: `rotate(${((i * 37) % 30) - 15}deg)` }}
+            className={`grid h-8 w-8 place-items-center rounded-full text-[15px] ${visited[i] ? 'animate-pop border-2 border-dashed border-chili bg-chili/10' : 'border-2 border-dashed border-stone-300 text-stone-300'}`}
+          >
+            {visited[i] ? '🧆' : '·'}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Hud() {
+  const { moving, legIdx, dir, current, vehicle } = useRun();
+  const [p, setP] = useState(0);
+  useEffect(() => {
+    if (!moving) return;
+    const id = setInterval(() => setP(live.progress), 100);
+    return () => clearInterval(id);
+  }, [moving]);
+  if (!moving) return null;
+  const leg = LEGS[legIdx], rt = LEG_RT[legIdx];
+  const from = STOPS[current], to = STOPS[current + dir];
+  const chatter = (dir > 0 ? leg.chatter : [...leg.chatter].reverse())[Math.min(leg.chatter.length - 1, Math.floor(p * leg.chatter.length))];
+  const v = VEHICLE_INFO[vehicle];
+  return (
+    <div className="animate-slide-in pointer-events-none absolute bottom-4 left-1/2 z-[2000] w-[min(94vw,540px)] -translate-x-1/2 rounded-3xl bg-stone-900/85 p-4 text-white shadow-2xl backdrop-blur">
+      <div className="flex items-center gap-3">
+        <div className="animate-wobble text-4xl">{v.emoji}</div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold uppercase tracking-wider text-amber-300">{v.label}</div>
+          <div className="truncate font-display text-lg font-semibold">{from.city === to.city ? `${from.name} → ${to.name}` : `${from.city} → ${to.city}`}</div>
+        </div>
+        <div className="text-right font-display tabular-nums">
+          <div className="text-2xl font-bold">{Math.round(rt.km * p)}</div>
+          <div className="text-[11px] text-stone-300">of {Math.round(rt.km)} km</div>
+        </div>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/15">
+        <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-chili" style={{ width: `${p * 100}%` }} />
+      </div>
+      <div className="mt-2 text-sm text-stone-200">“{chatter}”</div>
+    </div>
+  );
+}
+
+function StopLabels() {
+  const { current, visited, goTo, started, moving } = useRun();
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {DECO.map((d, i) => (
+        <div key={d.name} ref={el => { decoEls[i] = el; }} className="absolute left-0 top-0 origin-bottom whitespace-nowrap will-change-transform">
+          <span className={d.kind === 'country' ? 'font-display text-lg font-semibold tracking-[0.3em] text-sky-900/40' : 'text-[11px] font-semibold text-stone-700/60'}>
+            {d.kind === 'city' && '• '}{d.name}
+          </span>
+        </div>
+      ))}
+      {STOPS.map((s, i) => {
+        const here = started && i === current && !moving;
+        return (
+          <div key={s.id} ref={el => { labelEls[i] = el; }} className="absolute left-0 top-0 origin-bottom will-change-transform">
+            <button
+              onClick={() => goTo(i)}
+              className={`pointer-events-auto flex items-center gap-1.5 whitespace-nowrap rounded-full py-1 pl-1 pr-3 text-xs font-semibold shadow-lg ring-1 transition hover:scale-105 ${
+                here ? 'bg-crust text-white ring-crust' : 'bg-white/90 text-stone-800 ring-stone-900/10'
+              }`}
+            >
+              <span className={`grid h-5 w-5 place-items-center rounded-full text-[10px] ${here ? 'bg-white text-crust' : visited[i] ? 'bg-emerald-500 text-white' : 'bg-stone-200 text-stone-600'}`}>
+                {visited[i] ? '✓' : i + 1}
+              </span>
+              {s.name}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Intro() {
+  const { started, start } = useRun();
+  if (started) return null;
+  return (
+    <div className="pointer-events-auto absolute inset-0 z-[3000] grid place-items-center bg-sky-950/20 p-4 backdrop-blur-[2px]">
+      <div className="animate-slide-in w-full max-w-lg rounded-[2rem] bg-tahini p-7 text-center shadow-2xl ring-1 ring-stone-900/10">
+        <div className="text-6xl">🧆</div>
+        <h1 className="mt-2 font-display text-4xl font-bold text-stone-900 sm:text-5xl">Falafel Run</h1>
+        <div className="font-display text-lg font-semibold text-crust">Sverige edition · Malmö → Umeå</div>
+        <p className="mt-4 text-[15px] leading-relaxed text-stone-700">
+          {STOPS.length} of the best-rated falafel spots on the web. One country. Around {Math.round(TOTAL_KM / 10) * 10} km of chickpeas (and one round of fava beans).
+          You'll travel by car, train, tram, falafel van and, for the last leg, moose.
+        </p>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-xs text-stone-600">
+          <div className="rounded-2xl bg-white/70 p-2"><div className="text-lg">🖱️</div>Drag to orbit, scroll to zoom</div>
+          <div className="rounded-2xl bg-white/70 p-2"><div className="text-lg">🧆</div>Click any stop to drive there</div>
+          <div className="rounded-2xl bg-white/70 p-2"><div className="text-lg">⌨️</div>← → to drive, O for overview</div>
+        </div>
+        <button onClick={start} className="mt-6 w-full rounded-full bg-crust px-6 py-3.5 font-display text-xl font-semibold text-white shadow-lg shadow-crust/30 transition hover:bg-[#82491a] active:scale-[.98]">
+          Start the engine 🚗
+        </button>
+        <p className="mt-4 text-[11px] leading-snug text-stone-500">
+          Ratings come from the linked sources (Dagens PS composites, Google via aggregators, HappyCow, The Local and others). Review lines are paraphrased.
+          Researched Oct 2026; places and opening hours change, so check before you go.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Finale() {
+  const { showFinale, closeFinale, kmTotal, visited, toggleOverview } = useRun();
+  if (!showFinale) return null;
+  const n = visited.filter(Boolean).length;
+  return (
+    <div className="pointer-events-auto absolute inset-0 z-[3000] grid place-items-center bg-sky-950/25 p-4 backdrop-blur-[2px]">
+      <div className="animate-slide-in w-full max-w-md rounded-[2rem] bg-tahini p-7 text-center shadow-2xl ring-1 ring-stone-900/10">
+        <div className="text-6xl">🏁🫎🧆</div>
+        <h2 className="mt-2 font-display text-4xl font-bold text-stone-900">Du klarade det!</h2>
+        <p className="mt-1 text-stone-600">You reached the northernmost falafel on the route.</p>
+        <div className="mt-5 grid grid-cols-3 gap-2">
+          {[[Math.round(kmTotal).toLocaleString('sv-SE'), 'km travelled'], [`${n}/${STOPS.length}`, 'stops'], [n * 3, 'falafels (est.)']].map(([v, l]) => (
+            <div key={l} className="rounded-2xl bg-white/80 p-3">
+              <div className="font-display text-2xl font-bold text-crust">{v}</div>
+              <div className="text-xs text-stone-500">{l}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+          <Btn kind="ghost" className="flex-1" onClick={() => { closeFinale(); toggleOverview(); }}>🗺️ See the whole route</Btn>
+          <Btn className="flex-1" onClick={closeFinale}>Eat at King 🧆</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ onRoute }: { onRoute: () => void }) {
+  const { overview, toggleOverview, started, panelOpen, moving, setPanel } = useRun();
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-[2200] flex items-start justify-between gap-2 p-2 md:p-4">
+      <div className="pointer-events-auto flex items-center gap-2 rounded-full bg-white/85 py-1.5 pl-2 pr-4 shadow-lg ring-1 ring-stone-900/10 backdrop-blur">
+        <span className="text-2xl">🧆</span>
+        <div className="leading-none">
+          <div className="font-display text-lg font-bold text-stone-900">Falafel Run</div>
+          <div className="text-[11px] font-semibold text-crust">Sverige edition</div>
+        </div>
+      </div>
+      {started && (
+        <div className="pointer-events-auto flex gap-2">
+          <button onClick={onRoute} className="rounded-full bg-white/85 px-3.5 py-2 text-sm font-semibold text-stone-800 shadow-lg ring-1 ring-stone-900/10 backdrop-blur md:hidden">☰ Route</button>
+          {!panelOpen && !moving && !overview && (
+            <button onClick={() => setPanel(true)} className="rounded-full bg-white/85 px-3.5 py-2 text-sm font-semibold text-stone-800 shadow-lg ring-1 ring-stone-900/10 backdrop-blur">ℹ️ Info</button>
+          )}
+          <button onClick={toggleOverview} className={`rounded-full px-3.5 py-2 text-sm font-semibold shadow-lg ring-1 backdrop-blur ${overview ? 'bg-crust text-white ring-crust' : 'bg-white/85 text-stone-800 ring-stone-900/10'}`}>
+            🗺️ {overview ? 'Back to stop' : 'Overview'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ───────────────────────────── App ───────────────────────────── */
+
+function App() {
+  const [routeOpen, setRouteOpen] = useState(false);
+  useEffect(() => {
+    // Deep links: #stop=4 jumps straight to a stop, #overview shows the whole map.
+    const m = location.hash.match(/stop=(\d+)/);
+    if (m) {
+      const n = THREE.MathUtils.clamp(+m[1] - 1, 0, LAST);
+      rig.wantDist = 11;
+      useRun.setState({ started: true, overview: false, current: n, target: n, panelOpen: true, visited: STOPS.map((_, i) => i <= n) });
+      if (location.hash.includes('go')) setTimeout(() => useRun.getState().goTo(Math.min(LAST, n + 1)), 800);
+    } else if (location.hash.includes('overview')) {
+      useRun.getState().start();
+      useRun.getState().toggleOverview();
+    }
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const s = useRun.getState();
+      if (!s.started) { if (e.key === 'Enter') s.start(); return; }
+      if (e.key === 'ArrowRight') s.goTo(Math.min(LAST, (s.moving ? s.target : s.current) + 1));
+      else if (e.key === 'ArrowLeft') s.goTo(Math.max(0, (s.moving ? s.target : s.current) - 1));
+      else if (e.key.toLowerCase() === 'o') s.toggleOverview();
+      else if (e.key === 'Escape') s.setPanel(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  return (
+    <div className="relative h-full w-full overflow-hidden font-sans select-none">
+      <Canvas shadows dpr={[1, 2]} camera={{ position: [CENTER.x, 62, CENTER.z + 52], fov: 42, near: 0.1, far: 600 }}>
+        <Scene />
+      </Canvas>
+      <StopLabels />
+      <TopBar onRoute={() => setRouteOpen(o => !o)} />
+      {useRun(s => s.started) && <RouteList mobileOpen={routeOpen} onClose={() => setRouteOpen(false)} />}
+      <StopPanel />
+      <Hud />
+      <Intro />
+      <Finale />
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')!).render(<App />);
+</script>
+</body>
+</html>
